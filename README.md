@@ -1,7 +1,7 @@
 # Logstash Input Plugin for Zendesk
 
 
-**NOTE: We have since switched case systems and no longer have access to the Zendesk service.  This plugin is no longer being maintained.**
+**NOTE: I have made some changes in this plugin so it is working now with elastic 7.10 logstash version.This plugin is a extended version for previous logstash input plugin which was not mantained.**
 
 This input fetches data from Zendesk and generates Logstash events for indexing into Elasticsearch.
 It uses the official Zendesk ruby client api (https://github.com/zendesk/zendesk_api_client_rb).  
