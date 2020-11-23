@@ -4,7 +4,7 @@ Gem::Specification.new do |s|
   s.licenses = ['Apache License (2.0)']
   s.summary = "This input fetches various objects from Zendesk."
   s.description = "This gem is a logstash plugin required to be installed on top of the Logstash core pipeline using $LS_HOME/bin/plugin install logstash-input-zendesk-1.0.0.gem. This gem is not a stand-alone program"
-  s.authors = ["ppf2"]
+  s.authors = ["prakash"]
   s.homepage = "http://www.elastic.co/guide/en/logstash/current/index.html"
   s.require_paths = ["lib"]
 

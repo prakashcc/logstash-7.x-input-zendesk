@@ -3,18 +3,19 @@ require "logstash/inputs/base"
 require "logstash/namespace"
 require "logstash/util/socket_peer"
 require 'zendesk_api'
+require 'time'
 
 # This input will fetch data from Zendesk and generate Logstash events for indexing into Elasticsearch.
-# It uses the official Zendesk ruby client api (zendesk_api) and is compatible with Zendesk api v2.  
-# Currently, the input supports Zendesk organization, user, ticket, ticket comment and forum objects.  
+# It uses the official Zendesk ruby client api (zendesk_api) and is compatible with Zendesk api v2.
+# Currently, the input supports Zendesk organization, user, ticket, ticket comment and forum objects.
 # It assumes that the user specified has the appropriate Zendesk permissions to access the fetched objects.
 #
 # Sample configuration:
 #
 # [source,ruby]
 # ----------------------------------
-#     input 
-#     { 
+#     input
+#     {
 #       zendesk
 #       {
 #         domain => "company.zendesk.com"
@@ -33,7 +34,7 @@ require 'zendesk_api'
 #       }
 #     }
 #
-#    output 
+#    output
 #    {
 # 	   if [type] == "organization"
 # 	   {
@@ -65,10 +66,10 @@ require 'zendesk_api'
 #		   document_id => "%{id}"
 #		   manage_template => false
 #		   template_name => zendesk_template
-#		}	
-#	   } 
+#		}
+#	   }
 #	   else if [type] == "ticket"
-#	   {	
+#	   {
 #	     elasticsearch
 #		 {
 #		   host => "localhost"
@@ -81,8 +82,8 @@ require 'zendesk_api'
 #		   document_id => "%{id}"
 #		   manage_template => false
 #		   template_name => zendesk_template
-#		}	
-#	   } 
+#		}
+#	   }
 #	   else if [type] == "comment"
 #	   {
 #	     elasticsearch
@@ -97,7 +98,7 @@ require 'zendesk_api'
 #		   document_id => "%{id}"
 #		   manage_template => false
 #		   template_name => zendesk_template
-#		 }	
+#		 }
 #	   }
 #	   else if [type] == "topic"
 #	   {
@@ -113,8 +114,8 @@ require 'zendesk_api'
 #		   document_id => "%{id}"
 #		   manage_template => false
 #		   template_name => zendesk_template
-#		 }	
-#	   }  
+#		 }
+#	   }
 #    }
 # ----------------------------------
 
@@ -124,8 +125,8 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
 
   default :codec, "json"
 
-  # Zendesk domain.  
-  #   Example: 
+  # Zendesk domain.
+  #   Example:
   #     elasticsearch.zendesk.com
   config :domain, :validate => :string, :required => true
 
@@ -147,7 +148,7 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
 
   # Whether or not to fetch tickets.
   config :tickets, :validate => :boolean, :default => true
-  
+
   # Whether or not to fetch topics.
   config :topics, :validate => :boolean, :default => true
 
@@ -200,7 +201,7 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
       raise RuntimeError.new("Cannot initialize a valid Zendesk client.  Please check your login credentials.")
     else
       @logger.info("Successfully initialized a Zendesk client", :user => @user)
-    end      
+    end
   end
 
   # Get organizations. Organizations will be indexed using "organization" type.
@@ -216,15 +217,15 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
         @logger.info("Organization", :name => org.name, :progress => "#{count}/#{orgs.count}")
         event = LogStash::Event.new()
         org.attributes.each do |k,v|
-          event[k] = v
+          event.set(k,v)
         end # end attrs
-        event["type"] = "organization"
-        event["id"] = org.id
+        event.set("type","organization")
+        event.set("id",org.id)
         decorate(event)
         output_queue << event
         @logger.info("Done processing organization", :name => org.name)
         @org_hash[org.id] = org
-      end # end orgs loop 
+      end # end orgs loop
     rescue => e
       @logger.error(e.message, :method => "get_organizations", :trace => e.backtrace)
       puts e.backtrace
@@ -232,7 +233,7 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
     @logger.info("Done processing organizations.")
   end # end get_organizations
 
-  # Get users.  Users will be indexed using "user" type.  
+  # Get users.  Users will be indexed using "user" type.
   private
   def get_users(output_queue)
     begin
@@ -247,23 +248,23 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
         user.attributes.each do |k,v|
           if k == "user_fields"
             v.each do |ik,iv|
-              event[ik] = iv
+              event.set(ik,iv)
             end
           else
-            event[k] = v
+            event.set(k,v)
           end # end user fields
         end # end attrs
-        event["type"] = "user"
-        event["id"] = user.id
+        event.set("type","user")
+        event.set("id",user.id)
         # Pull organization name into user object for reporting purposes
         if @organizations && !@org_hash[user.organization_id].nil?
-          event["organization_name"] = @org_hash[user.organization_id].name
+          event.set("organization_name",@org_hash[user.organization_id].name)
         end
         decorate(event)
         output_queue << event
         @logger.info("Done processing user", :name => user.name)
         @user_hash[user.id] = user
-      end # end user loop 
+      end # end user loop
     rescue => e
       @logger.error(e.message, :method => "get_users", :trace => e.backtrace)
     end
@@ -282,16 +283,16 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
     end
     org_id
   end
-  
+
   # Get tickets.  Tickets will be indexed using "ticket" type.
-  # This input uses the Zendesk incremental export api (http://developer.zendesk.com/documentation/rest_api/ticket_export.html) 
-  # to retrieve tickets due to Zendesk ticket archiving policies 
-  # (https://support.zendesk.com/entries/28452998-Ticket-Archiving) - so that 
+  # This input uses the Zendesk incremental export api (http://developer.zendesk.com/documentation/rest_api/ticket_export.html)
+  # to retrieve tickets due to Zendesk ticket archiving policies
+  # (https://support.zendesk.com/entries/28452998-Ticket-Archiving) - so that
   # tickets closed > 120 days ago can be fetched.
   private
   def get_tickets(output_queue, last_updated_n_days, get_comments)
-    # Pull in ticket field names because Zendesk incremental export api 
-    # returns fields names in the format `field_<field_id>`. 
+    # Pull in ticket field names because Zendesk incremental export api
+    # returns fields names in the format `field_<field_id>`.
     begin
       @ticketfields = Hash.new
       ticket_fields = @zd_client.ticket_fields
@@ -300,14 +301,14 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
       end
       @logger.info("Processing tickets ...")
       next_page = true
-      if last_updated_n_days != -1
-        start_time = Time.now.to_i - (86400 * last_updated_n_days)
+      if last_updated_n_days != -1000
+        start_time = Time.now.to_i - (111186400 * last_updated_n_days)
       else
         start_time = 0
       end
       tickets = ZendeskAPI::Ticket.incremental_export(@zd_client, start_time)
       next_page_from_each = ""
-      next_page_from_next = ""    
+      next_page_from_next = ""
       count = 0
       while next_page && tickets.count > 0
         @logger.info("Next page from Zendesk api", :next_page_url => tickets.instance_variable_get("@next_page"))
@@ -327,7 +328,7 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
         tickets.next
         next_page_from_next = tickets.instance_variable_get("@next_page")
         # Zendesk api creates a next page attribute in its incremental export response including a generated
-        # start_time for the "next page" request.  Occasionally, it generates 
+        # start_time for the "next page" request.  Occasionally, it generates
         # the next page request with the same start_time as the originating request.
         # When this happens, it will keep requesting the same page over and over again.  Added a check to workaround this
         # behavior.
@@ -339,7 +340,7 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
     # Zendesk api generates the start_time for the next page request.
     # If it ends up generating a start time that is within 5 minutes from now, it will return the following message
     # instead of a regular json response:
-    # "Too recent start_time. Use a start_time older than 5 minutes". 
+    # "Too recent start_time. Use a start_time older than 5 minutes".
     # This is added to ignore the message and treat it as benign.
     rescue => e
       if e.message.index 'Too recent start_time'
@@ -373,10 +374,10 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
             full_resolution="7 - 14 days"
           elsif (full_resolution_time > 20160)
             full_resolution="> 14 days"
-          else full_resolution = "Not Applicable" 
+          else full_resolution = "Not Applicable"
           end
-          event["full_resolution_time_range"] = full_resolution
-          event["full_resolution_time_in_minutes"] = full_resolution_time
+          event.set("full_resolution_time_range",full_resolution)
+          event.set("full_resolution_time_in_minutes",full_resolution_time)
         elsif k == "first_reply_time_in_minutes"
           first_reply = ""
           first_reply_time = v.to_i
@@ -388,10 +389,10 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
             first_reply="8 - 24 hours"
           elsif (first_reply_time > 1440)
             first_reply="> 24 hours"
-          else first_reply = "Not Applicable" 
+          else first_reply = "Not Applicable"
           end
-          event["first_reply_time_range"] = first_reply
-          event["first_reply_time_in_minutes"] = first_reply_time                  
+          event.set("first_reply_time_range",first_reply)
+          event.set("first_reply_time_in_minutes",first_reply_time)
         elsif k.match(/^field_/) && !@ticketfields[k].nil?
           if @ticketfields[k] == "total_time_spent_(sec)"
             total_time = ""
@@ -404,31 +405,31 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
               total_time="8 - 24 hours"
             elsif (total_time_spent_sec > 86400)
               total_time="> 24 hours"
-            else total_time = "Not Applicable" 
+            else total_time = "Not Applicable"
             end
-            event["total_time_spent_range"] = total_time
-            event["total_time_spent_(sec)"] = total_time_spent_sec
-          else      
-            event[@ticketfields[k]] = v
+            event.set("total_time_spent_range",total_time)
+            event.set("total_time_spent_(sec)",total_time_spent_sec)
+          else
+            event.set(@ticketfields[k],v)
           end
-        elsif k.match(/_minutes/) || k.match(/_id/)
-          event[k] = v.nil? ? nil : v.to_i
-        elsif k.match(/_at$/)
-          event[k] = v.nil? ? nil : Time.parse(v).iso8601    
+        # elsif k.match(/_minutes/) || k.match(/_id/)
+        #   event.set(k,v.nil? ? nil : v.to_i)
+        # elsif k.match(/_at$/)
+        #   event.set(k,v.nil? ? nil : Date.new(v).iso8601)
         elsif k == "organization_name"
           # it appears that Zendesk has changed their incremental export API to return organization_id
           # instead of organization_name, but the ruby api has not yet been updated.
           # this is to workaround it
-          event["org_id"] = get_org_id(v)
-          event["organization_name"] = v
+          event.set("org_id",get_org_id(v))
+          event.set("organization_name",v)
         else
-          event[k] = v
+          event.set(k,v)
         end
       end # end ticket fields
-      event["type"] = "ticket"
-      event["id"] = ticket.id
+      event.set("type","ticket")
+      event.set("id",ticket.id)
       if get_comments
-        event["comments"] = get_ticket_comments(output_queue, ticket, @append_comments_to_tickets)
+        event.set("comments",get_ticket_comments(output_queue, ticket, @append_comments_to_tickets))
       end
       decorate(event)
       output_queue << event
@@ -436,9 +437,9 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
       @logger.error(e.message, :method => "process_ticket", :trace => e.backtrace)
     end
   end # end process tickets
-  
+
   # Get ticket comments.  Comments will be indexed using the "comment" type.
-  # If append_comments => true, create a single large text field bundling up related comments (sorted descendingly) 
+  # If append_comments => true, create a single large text field bundling up related comments (sorted descendingly)
   # and append to parent ticket when indexing tickets.
   # For comments with longitude and latitude values, a geoJSON array named "geocode" is automatically created for Kibana 3's bettermap.
   # Note that this requires your mapping to have geocode field configured to be geo_point data type.
@@ -467,40 +468,40 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
         end
         event = LogStash::Event.new()
         comment.attributes.each do |k,v|
-          event[k] = v
+          event.set(k,v)
         end # end attrs
         # Construct geoJSON array for Kibana
         if (!comment.metadata.system.longitude.nil?) && (!comment.metadata.system.latitude.nil?)
           geo_json = Array.new
           geo_json[0] = comment.metadata.system.longitude
           geo_json[1] = comment.metadata.system.latitude
-          event["geocode"] = geo_json
+          event.set("geocode",geo_json)
         end
         # Additional ticket fields
-        event["ticket_subject"] = ticket.subject
-        event["ticket_id"] = ticket.id
-        event["ticket_organization_name"] = ticket.organization_name
-        event["ticket_requester"] = ticket.req_name
-        event["ticket_assignee"] = ticket.assignee_name
+        event.set("ticket_subject",ticket.subject)
+        event.set("ticket_id",ticket_id)
+        event.set("ticket_organization_name",ticket_organization_name)
+        event.set("ticket_requester",ticket.req_name)
+        event.set("ticket_assignee",ticket.assignee_name)
         # Additional org fields
-        if (@organizations && !@org_hash[get_org_id(ticket.organization_name)].nil?) 
-          event["ticket_org_status"] = @org_hash[get_org_id(ticket.organization_name)].organization_fields.org_status
-        end 
-        if (@organizations && !@org_hash[get_org_id(ticket.organization_name)].nil?) 
-          event["ticket_org_created_at"] = @org_hash[get_org_id(ticket.organization_name)].created_at
-        end          
+        if (@organizations && !@org_hash[get_org_id(ticket.organization_name)].nil?)
+          event.set("ticket_org_status",@org_hash[get_org_id(ticket.organization_name)].organization_fields.org_status)
+        end
+        if (@organizations && !@org_hash[get_org_id(ticket.organization_name)].nil?)
+          event.set("ticket_org_created_at",@org_hash[get_org_id(ticket.organization_name)].created_at)
+        end
         if ((@organizations && !@org_hash[get_org_id(ticket.organization_name)].nil?) && (@users && !@user_hash[comment.author_id].nil?))
           author_org_id = @user_hash[comment.author_id].organization_id
         if !@org_hash[author_org_id].nil?
-            event["author_organization_name"] = @org_hash[author_org_id].name
+            event.set("author_organization_name",@org_hash[author_org_id].name)
           end
-        end   
-        # Additional user fields
-        if (@users && !@user_hash[comment.author_id].nil?) 
-          event["author_name"] = @user_hash[comment.author_id].name
         end
-        event["type"] = "comment"
-        event["id"] = comment.id
+        # Additional user fields
+        if (@users && !@user_hash[comment.author_id].nil?)
+          event.set("author_name",@user_hash[comment.author_id].name)
+        end
+        event.set("type","comment")
+        event.set("id",comment.id)
         decorate(event)
         output_queue << event
         @logger.info("Done processing comment", :id => comment.id)
@@ -532,25 +533,25 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
         @logger.info("Topic", :title => topic.title, :progress => "#{count}/#{topics.count}")
         event = LogStash::Event.new()
         topic.attributes.each do |k,v|
-          event[k] = v
+          event.set(k,v)
         end # end attrs
-        event["type"] = "topic"
-        event["id"] = topic.id
+        event.set("type","topic")
+        event.set("id",topic.id)
         # topic.forum.name is slow, not using it
-        event["forum_name"] = @forum_hash[topic.forum_id]
-        event["author_name"] = !@user_hash[topic.submitter_id].nil? ? @user_hash[topic.submitter_id].name : nil
+        event.set("forum_name",@forum_hash[topic.forum_id])
+        event.set("author_name",!@user_hash[topic.submitter_id].nil? ? @user_hash[topic.submitter_id].name : nil)
         decorate(event)
         output_queue << event
         @logger.info("Done processing topic", :title => topic.title)
-      end # end topics loop 
+      end # end topics loop
     rescue => e
       @logger.error(e.message, :method => "get_topics", :trace => e.backtrace)
       puts e.backtrace
     end
     @logger.info("Done processing topics.")
   end # end get_topics
-  
-  # Get forums. 
+
+  # Get forums.
   private
   def get_forums
     begin
@@ -563,13 +564,13 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
         @logger.info("Forum", :name => forum.name, :progress => "#{count}/#{forums.count}")
         @forum_hash[forum.id] = forum.name
         @logger.info("Done processing forum", :name => forum.name)
-      end # end forums loop 
+      end # end forums loop
     rescue => e
       @logger.error(e.message, :method => "get_forums", :trace => e.backtrace)
       puts e.backtrace
     end
     @logger.info("Done processing forums.")
-  end # end get_forums  
+  end # end get_forums
 
 
   # Run Zendesk input continuously at specified sleep intervals.  If tickets_last_updated_n_days_ago => -1,
@@ -581,7 +582,7 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
       @logger.info("Starting Zendesk input run.", :start_time => start)
       puts "Starting Zendesk input run: " + start.to_s
       @org_hash = Hash.new
-      @user_hash = Hash.new   
+      @user_hash = Hash.new
       @forum_hash = Hash.new
       zendesk_client
       @organizations ? get_organizations(output_queue) : nil
@@ -593,7 +594,7 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
       @org_hash = nil
       @user_hash = nil
       @forum_hash = nil
-      @zd_client = nil      
+      @zd_client = nil
       if @tickets_last_updated_n_days_ago == -1
         break
       end
@@ -603,4 +604,3 @@ class LogStash::Inputs::Zendesk < LogStash::Inputs::Base
     rescue LogStash::ShutdownSignal
   end # def run
 end # class LogStash::Inputs::Zendesk
-
