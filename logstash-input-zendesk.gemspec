@@ -1,5 +1,5 @@
 Gem::Specification.new do |s|
-  s.name = 'logstash-7.x-input-zendesk'
+  s.name = 'logstash-input-zendesk'
   s.version         = '2.0.0'
   s.licenses = ['Apache License (2.0)']
   s.summary = "This input fetches various objects from Zendesk."
